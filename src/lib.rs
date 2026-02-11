@@ -45,9 +45,15 @@ impl AddrPinState {
     }
 }
 
-pub struct Pcal6416aDevice<I2c> {
+pub struct Pcal6416aDevice<'a, I2c> {
     pub addr_pin: AddrPinState,
     pub i2cbus: I2c,
+    pub share_device: Option<
+        embassy_sync::mutex::Mutex<
+            embassy_sync::blocking_mutex::raw::NoopRawMutex,
+            &'a mut Device<Pcal6416aDevice<'a, I2c>>,
+        >,
+    >,
 }
 
 device_driver::create_device!(
@@ -55,7 +61,7 @@ device_driver::create_device!(
     manifest: "device.yaml"
 );
 
-impl<I2c: embedded_hal_async::i2c::I2c> device_driver::AsyncRegisterInterface for Pcal6416aDevice<I2c> {
+impl<I2c: embedded_hal_async::i2c::I2c> device_driver::AsyncRegisterInterface for Pcal6416aDevice<'_, I2c> {
     type Error = Pcal6416aError<I2c::Error>;
     type AddressType = u8;
 
@@ -94,7 +100,7 @@ impl<I2c: embedded_hal_async::i2c::I2c> device_driver::AsyncRegisterInterface fo
     }
 }
 
-impl<I2c: embedded_hal::i2c::I2c> device_driver::RegisterInterface for Pcal6416aDevice<I2c> {
+impl<I2c: embedded_hal::i2c::I2c> device_driver::RegisterInterface for Pcal6416aDevice<'_, I2c> {
     type Error = Pcal6416aError<I2c::Error>;
     type AddressType = u8;
 
@@ -231,11 +237,20 @@ impl Pin {
 /// (which is the normal case in embedded contexts).
 pub struct IoPin<'a, I2c> {
     pin: Pin,
-    device: &'a core::cell::UnsafeCell<Device<Pcal6416aDevice<I2c>>>,
+    device: &'a embassy_sync::mutex::Mutex<
+        embassy_sync::blocking_mutex::raw::NoopRawMutex,
+        &'a mut Device<Pcal6416aDevice<'a, I2c>>,
+    >,
 }
 
 impl<'a, I2c> IoPin<'a, I2c> {
-    const fn new(pin: Pin, device: &'a core::cell::UnsafeCell<Device<Pcal6416aDevice<I2c>>>) -> Self {
+    const fn new(
+        pin: Pin,
+        device: &'a embassy_sync::mutex::Mutex<
+            embassy_sync::blocking_mutex::raw::NoopRawMutex,
+            &'a mut Device<Pcal6416aDevice<'a, I2c>>,
+        >,
+    ) -> Self {
         Self { pin, device }
     }
 
@@ -252,71 +267,6 @@ impl<'a, I2c> IoPin<'a, I2c> {
     }
 }
 
-impl<I2c: embedded_hal::i2c::I2c> IoPin<'_, I2c> {
-    /// Read the state of this input pin
-    /// # Errors
-    ///
-    /// Will return `Err` if underlying I2C bus operation fails
-    pub fn is_high(&self) -> Result<bool, Pcal6416aError<I2c::Error>> {
-        // SAFETY: This is safe because pin operations are atomic and complete immediately
-        unsafe { (*self.device.get()).is_pin_high(self.pin) }
-    }
-
-    /// Read the state of this input pin
-    /// # Errors
-    ///
-    /// Will return `Err` if underlying I2C bus operation fails
-    pub fn is_low(&self) -> Result<bool, Pcal6416aError<I2c::Error>> {
-        // SAFETY: This is safe because pin operations are atomic and complete immediately
-        unsafe { (*self.device.get()).is_pin_low(self.pin) }
-    }
-
-    /// Set this output pin to high state
-    /// # Errors
-    ///
-    /// Will return `Err` if underlying I2C bus operation fails
-    pub fn set_high(&self) -> Result<(), Pcal6416aError<I2c::Error>> {
-        // SAFETY: This is safe because pin operations are atomic and complete immediately
-        unsafe { (*self.device.get()).set_pin_high(self.pin) }
-    }
-
-    /// Set this output pin to low state
-    /// # Errors
-    ///
-    /// Will return `Err` if underlying I2C bus operation fails
-    pub fn set_low(&self) -> Result<(), Pcal6416aError<I2c::Error>> {
-        // SAFETY: This is safe because pin operations are atomic and complete immediately
-        unsafe { (*self.device.get()).set_pin_low(self.pin) }
-    }
-
-    /// Toggle this output pin state
-    /// # Errors
-    ///
-    /// Will return `Err` if underlying I2C bus operation fails
-    pub fn toggle(&self) -> Result<(), Pcal6416aError<I2c::Error>> {
-        // SAFETY: This is safe because pin operations are atomic and complete immediately
-        unsafe { (*self.device.get()).toggle_pin(self.pin) }
-    }
-
-    /// Read the current state of this output pin
-    /// # Errors
-    ///
-    /// Will return `Err` if underlying I2C bus operation fails
-    pub fn is_set_high(&self) -> Result<bool, Pcal6416aError<I2c::Error>> {
-        // SAFETY: This is safe because pin operations are atomic and complete immediately
-        unsafe { (*self.device.get()).is_pin_set_high(self.pin) }
-    }
-
-    /// Read the current state of this output pin
-    /// # Errors
-    ///
-    /// Will return `Err` if underlying I2C bus operation fails
-    pub fn is_set_low(&self) -> Result<bool, Pcal6416aError<I2c::Error>> {
-        // SAFETY: This is safe because pin operations are atomic and complete immediately
-        unsafe { (*self.device.get()).is_pin_set_low(self.pin) }
-    }
-}
-
 impl<I2c: embedded_hal_async::i2c::I2c> IoPin<'_, I2c> {
     /// Read the state of this input pin (async version)
     /// # Errors
@@ -324,7 +274,7 @@ impl<I2c: embedded_hal_async::i2c::I2c> IoPin<'_, I2c> {
     /// Will return `Err` if underlying I2C bus operation fails
     pub async fn is_high_async(&self) -> Result<bool, Pcal6416aError<I2c::Error>> {
         // SAFETY: This is safe because pin operations are atomic and complete immediately
-        unsafe { (*self.device.get()).is_pin_high_async(self.pin).await }
+        self.device.lock().await.is_pin_high_async(self.pin).await
     }
 
     /// Read the state of this input pin (async version)
@@ -341,7 +291,7 @@ impl<I2c: embedded_hal_async::i2c::I2c> IoPin<'_, I2c> {
     /// Will return `Err` if underlying I2C bus operation fails
     pub async fn set_high_async(&self) -> Result<(), Pcal6416aError<I2c::Error>> {
         // SAFETY: This is safe because pin operations are atomic and complete immediately
-        unsafe { (*self.device.get()).set_pin_high_async(self.pin).await }
+        self.device.lock().await.set_pin_high_async(self.pin).await
     }
 
     /// Set this output pin to low state (async version)
@@ -350,7 +300,7 @@ impl<I2c: embedded_hal_async::i2c::I2c> IoPin<'_, I2c> {
     /// Will return `Err` if underlying I2C bus operation fails
     pub async fn set_low_async(&self) -> Result<(), Pcal6416aError<I2c::Error>> {
         // SAFETY: This is safe because pin operations are atomic and complete immediately
-        unsafe { (*self.device.get()).set_pin_low_async(self.pin).await }
+        self.device.lock().await.set_pin_low_async(self.pin).await
     }
 
     /// Toggle this output pin state (async version)
@@ -359,7 +309,7 @@ impl<I2c: embedded_hal_async::i2c::I2c> IoPin<'_, I2c> {
     /// Will return `Err` if underlying I2C bus operation fails
     pub async fn toggle_async(&self) -> Result<(), Pcal6416aError<I2c::Error>> {
         // SAFETY: This is safe because pin operations are atomic and complete immediately
-        unsafe { (*self.device.get()).toggle_pin_async(self.pin).await }
+        self.device.lock().await.toggle_pin_async(self.pin).await
     }
 
     /// Read the current state of this output pin (async version)
@@ -368,7 +318,7 @@ impl<I2c: embedded_hal_async::i2c::I2c> IoPin<'_, I2c> {
     /// Will return `Err` if underlying I2C bus operation fails
     pub async fn is_set_high_async(&self) -> Result<bool, Pcal6416aError<I2c::Error>> {
         // SAFETY: This is safe because pin operations are atomic and complete immediately
-        unsafe { (*self.device.get()).is_pin_set_high_async(self.pin).await }
+        self.device.lock().await.is_pin_set_high_async(self.pin).await
     }
 
     /// Read the current state of this output pin (async version)
@@ -380,46 +330,7 @@ impl<I2c: embedded_hal_async::i2c::I2c> IoPin<'_, I2c> {
     }
 }
 
-// Implement embedded-hal digital traits for IoPin
-impl<I2c: embedded_hal::i2c::I2c> embedded_hal::digital::ErrorType for IoPin<'_, I2c> {
-    type Error = Pcal6416aError<I2c::Error>;
-}
-
-impl<I2c: embedded_hal::i2c::I2c> embedded_hal::digital::InputPin for IoPin<'_, I2c> {
-    fn is_high(&mut self) -> Result<bool, Self::Error> {
-        IoPin::is_high(self)
-    }
-
-    fn is_low(&mut self) -> Result<bool, Self::Error> {
-        IoPin::is_low(self)
-    }
-}
-
-impl<I2c: embedded_hal::i2c::I2c> embedded_hal::digital::OutputPin for IoPin<'_, I2c> {
-    fn set_low(&mut self) -> Result<(), Self::Error> {
-        IoPin::set_low(self)
-    }
-
-    fn set_high(&mut self) -> Result<(), Self::Error> {
-        IoPin::set_high(self)
-    }
-}
-
-impl<I2c: embedded_hal::i2c::I2c> embedded_hal::digital::StatefulOutputPin for IoPin<'_, I2c> {
-    fn is_set_high(&mut self) -> Result<bool, Self::Error> {
-        IoPin::is_set_high(self)
-    }
-
-    fn is_set_low(&mut self) -> Result<bool, Self::Error> {
-        IoPin::is_set_low(self)
-    }
-
-    fn toggle(&mut self) -> Result<(), Self::Error> {
-        IoPin::toggle(self)
-    }
-}
-
-impl<I2c: embedded_hal::i2c::I2c> Device<Pcal6416aDevice<I2c>> {
+impl<I2c: embedded_hal::i2c::I2c> Device<Pcal6416aDevice<'_, I2c>> {
     /// Read the state of an input pin
     /// # Errors
     ///
@@ -584,7 +495,7 @@ impl<I2c: embedded_hal::i2c::I2c> Device<Pcal6416aDevice<I2c>> {
     }
 }
 
-impl<I2c: embedded_hal_async::i2c::I2c> Device<Pcal6416aDevice<I2c>> {
+impl<I2c: embedded_hal_async::i2c::I2c> Device<Pcal6416aDevice<'_, I2c>> {
     /// Read the state of an input pin (async version)
     /// # Errors
     ///
@@ -761,7 +672,7 @@ impl<I2c: embedded_hal_async::i2c::I2c> Device<Pcal6416aDevice<I2c>> {
     }
 }
 
-impl<I2c: embedded_hal::i2c::I2c> Device<Pcal6416aDevice<I2c>> {
+impl<'a, I2c: embedded_hal::i2c::I2c> Device<Pcal6416aDevice<'a, I2c>> {
     /// Split the driver into an array of individual pin instances
     ///
     /// This borrows the device mutably and returns an array of 16 `IoPin` instances,
@@ -785,35 +696,35 @@ impl<I2c: embedded_hal::i2c::I2c> Device<Pcal6416aDevice<I2c>> {
     ///     println!("Pin {} number: {}", i, pin.number());
     /// }
     /// ```
-    pub fn split(&mut self) -> [IoPin<'_, I2c>; 16] {
-        use core::cell::UnsafeCell;
+    pub fn split(&mut self) -> [IoPin<'a, I2c>; 16] {
+        // use core::cell::UnsafeCell;
 
-        // SAFETY: We use UnsafeCell to allow interior mutability.
-        // This is safe because:
-        // 1. Each pin operation is atomic and completes before another starts
-        // 2. The array borrows the device mutably, ensuring exclusive access
-        // 3. All pins share the same device lifetime
-        // 4. This is a common pattern in embedded HAL drivers for sharing hardware
-        let device_cell =
-            unsafe { &*(self as *mut Device<Pcal6416aDevice<I2c>> as *const UnsafeCell<Device<Pcal6416aDevice<I2c>>>) };
+        // // SAFETY: We use UnsafeCell to allow interior mutability.
+        // // This is safe because:
+        // // 1. Each pin operation is atomic and completes before another starts
+        // // 2. The array borrows the device mutably, ensuring exclusive access
+        // // 3. All pins share the same device lifetime
+        // // 4. This is a common pattern in embedded HAL drivers for sharing hardware
+        // let device_cell =
+        //     unsafe { &*(self as *mut Device<Pcal6416aDevice<I2c>> as *const UnsafeCell<Device<Pcal6416aDevice<I2c>>>) };
 
         [
-            IoPin::new(Pin::Pin0, device_cell),
-            IoPin::new(Pin::Pin1, device_cell),
-            IoPin::new(Pin::Pin2, device_cell),
-            IoPin::new(Pin::Pin3, device_cell),
-            IoPin::new(Pin::Pin4, device_cell),
-            IoPin::new(Pin::Pin5, device_cell),
-            IoPin::new(Pin::Pin6, device_cell),
-            IoPin::new(Pin::Pin7, device_cell),
-            IoPin::new(Pin::Pin8, device_cell),
-            IoPin::new(Pin::Pin9, device_cell),
-            IoPin::new(Pin::Pin10, device_cell),
-            IoPin::new(Pin::Pin11, device_cell),
-            IoPin::new(Pin::Pin12, device_cell),
-            IoPin::new(Pin::Pin13, device_cell),
-            IoPin::new(Pin::Pin14, device_cell),
-            IoPin::new(Pin::Pin15, device_cell),
+            IoPin::new(Pin::Pin0, self.interface.share_device.as_ref().unwrap()),
+            IoPin::new(Pin::Pin1, self.interface.share_device.as_ref().unwrap()),
+            IoPin::new(Pin::Pin2, self.interface.share_device.as_ref().unwrap()),
+            IoPin::new(Pin::Pin3, self.interface.share_device.as_ref().unwrap()),
+            IoPin::new(Pin::Pin4, self.interface.share_device.as_ref().unwrap()),
+            IoPin::new(Pin::Pin5, self.interface.share_device.as_ref().unwrap()),
+            IoPin::new(Pin::Pin6, self.interface.share_device.as_ref().unwrap()),
+            IoPin::new(Pin::Pin7, self.interface.share_device.as_ref().unwrap()),
+            IoPin::new(Pin::Pin8, self.interface.share_device.as_ref().unwrap()),
+            IoPin::new(Pin::Pin9, self.interface.share_device.as_ref().unwrap()),
+            IoPin::new(Pin::Pin10, self.interface.share_device.as_ref().unwrap()),
+            IoPin::new(Pin::Pin11, self.interface.share_device.as_ref().unwrap()),
+            IoPin::new(Pin::Pin12, self.interface.share_device.as_ref().unwrap()),
+            IoPin::new(Pin::Pin13, self.interface.share_device.as_ref().unwrap()),
+            IoPin::new(Pin::Pin14, self.interface.share_device.as_ref().unwrap()),
+            IoPin::new(Pin::Pin15, self.interface.share_device.as_ref().unwrap()),
         ]
     }
 }
@@ -831,6 +742,7 @@ mod tests {
         let mut dev = Device::new(Pcal6416aDevice {
             addr_pin: AddrPinState::Low,
             i2cbus,
+            share_device: None,
         });
         let input_port_0 = dev.input_port_0().read_async().await.unwrap();
         assert_eq!(input_port_0.i_0_7(), false);
@@ -851,6 +763,7 @@ mod tests {
         let mut dev = Device::new(Pcal6416aDevice {
             addr_pin: AddrPinState::Low,
             i2cbus,
+            share_device: None,
         });
         let input_port_0 = dev.input_port_0().read().unwrap();
         assert_eq!(input_port_0.i_0_7(), false);
@@ -871,6 +784,7 @@ mod tests {
         let mut dev = Device::new(Pcal6416aDevice {
             addr_pin: AddrPinState::Low,
             i2cbus,
+            share_device: None,
         });
         let input_port_1 = dev.input_port_1().read_async().await.unwrap();
         assert_eq!(input_port_1.i_1_7(), false);
@@ -891,6 +805,7 @@ mod tests {
         let mut dev = Device::new(Pcal6416aDevice {
             addr_pin: AddrPinState::Low,
             i2cbus,
+            share_device: None,
         });
         let input_port_1 = dev.input_port_1().read().unwrap();
         assert_eq!(input_port_1.i_1_7(), false);
@@ -911,6 +826,7 @@ mod tests {
         let mut dev = Device::new(Pcal6416aDevice {
             addr_pin: AddrPinState::Low,
             i2cbus,
+            share_device: None,
         });
         let output_port_0 = dev.output_port_0().read_async().await.unwrap();
         assert_eq!(output_port_0.o_0_7(), false);
@@ -931,6 +847,7 @@ mod tests {
         let mut dev = Device::new(Pcal6416aDevice {
             addr_pin: AddrPinState::Low,
             i2cbus,
+            share_device: None,
         });
         let output_port_0 = dev.output_port_0().read().unwrap();
         assert_eq!(output_port_0.o_0_7(), false);
@@ -951,6 +868,7 @@ mod tests {
         let mut dev = Device::new(Pcal6416aDevice {
             addr_pin: AddrPinState::Low,
             i2cbus,
+            share_device: None,
         });
         dev.output_port_0()
             .write_async(|c| {
@@ -975,6 +893,7 @@ mod tests {
         let mut dev = Device::new(Pcal6416aDevice {
             addr_pin: AddrPinState::Low,
             i2cbus,
+            share_device: None,
         });
         dev.output_port_0()
             .write(|c| {
@@ -998,6 +917,7 @@ mod tests {
         let mut dev = Device::new(Pcal6416aDevice {
             addr_pin: AddrPinState::Low,
             i2cbus,
+            share_device: None,
         });
         let output_port_1 = dev.output_port_1().read_async().await.unwrap();
         assert_eq!(output_port_1.o_1_7(), false);
@@ -1018,6 +938,7 @@ mod tests {
         let mut dev = Device::new(Pcal6416aDevice {
             addr_pin: AddrPinState::Low,
             i2cbus,
+            share_device: None,
         });
         let output_port_1 = dev.output_port_1().read().unwrap();
         assert_eq!(output_port_1.o_1_7(), false);
@@ -1038,6 +959,7 @@ mod tests {
         let mut dev = Device::new(Pcal6416aDevice {
             addr_pin: AddrPinState::Low,
             i2cbus,
+            share_device: None,
         });
         dev.output_port_1()
             .write_async(|c| {
@@ -1062,6 +984,7 @@ mod tests {
         let mut dev = Device::new(Pcal6416aDevice {
             addr_pin: AddrPinState::Low,
             i2cbus,
+            share_device: None,
         });
         dev.output_port_1()
             .write(|c| {
@@ -1085,6 +1008,7 @@ mod tests {
         let mut dev = Device::new(Pcal6416aDevice {
             addr_pin: AddrPinState::Low,
             i2cbus,
+            share_device: None,
         });
         let config_port_0 = dev.config_port_0().read_async().await.unwrap();
         assert_eq!(config_port_0.c_0_7(), false);
@@ -1105,6 +1029,7 @@ mod tests {
         let mut dev = Device::new(Pcal6416aDevice {
             addr_pin: AddrPinState::Low,
             i2cbus,
+            share_device: None,
         });
         let config_port_0 = dev.config_port_0().read().unwrap();
         assert_eq!(config_port_0.c_0_7(), false);
@@ -1125,6 +1050,7 @@ mod tests {
         let mut dev = Device::new(Pcal6416aDevice {
             addr_pin: AddrPinState::Low,
             i2cbus,
+            share_device: None,
         });
         dev.config_port_0()
             .write_async(|c| {
@@ -1149,6 +1075,7 @@ mod tests {
         let mut dev = Device::new(Pcal6416aDevice {
             addr_pin: AddrPinState::Low,
             i2cbus,
+            share_device: None,
         });
         dev.config_port_0()
             .write(|c| {
@@ -1172,6 +1099,7 @@ mod tests {
         let mut dev = Device::new(Pcal6416aDevice {
             addr_pin: AddrPinState::Low,
             i2cbus,
+            share_device: None,
         });
         let config_port_1 = dev.config_port_1().read_async().await.unwrap();
         assert_eq!(config_port_1.c_1_7(), false);
@@ -1192,6 +1120,7 @@ mod tests {
         let mut dev = Device::new(Pcal6416aDevice {
             addr_pin: AddrPinState::Low,
             i2cbus,
+            share_device: None,
         });
         let config_port_1 = dev.config_port_1().read().unwrap();
         assert_eq!(config_port_1.c_1_7(), false);
@@ -1212,6 +1141,7 @@ mod tests {
         let mut dev = Device::new(Pcal6416aDevice {
             addr_pin: AddrPinState::Low,
             i2cbus,
+            share_device: None,
         });
         dev.config_port_1()
             .write_async(|c| {
@@ -1236,6 +1166,7 @@ mod tests {
         let mut dev = Device::new(Pcal6416aDevice {
             addr_pin: AddrPinState::Low,
             i2cbus,
+            share_device: None,
         });
         dev.config_port_1()
             .write(|c| {
@@ -1259,6 +1190,7 @@ mod tests {
         let mut dev = Device::new(Pcal6416aDevice {
             addr_pin: AddrPinState::Low,
             i2cbus,
+            share_device: None,
         });
         let pull_up_down_enable_port_0 = dev.pull_up_down_enable_port_0().read_async().await.unwrap();
         assert_eq!(pull_up_down_enable_port_0.pe_0_7(), false);
@@ -1279,6 +1211,7 @@ mod tests {
         let mut dev = Device::new(Pcal6416aDevice {
             addr_pin: AddrPinState::Low,
             i2cbus,
+            share_device: None,
         });
         let pull_up_down_enable_port_0 = dev.pull_up_down_enable_port_0().read().unwrap();
         assert_eq!(pull_up_down_enable_port_0.pe_0_7(), false);
@@ -1299,6 +1232,7 @@ mod tests {
         let mut dev = Device::new(Pcal6416aDevice {
             addr_pin: AddrPinState::Low,
             i2cbus,
+            share_device: None,
         });
         dev.pull_up_down_enable_port_0()
             .write_async(|c| {
@@ -1323,6 +1257,7 @@ mod tests {
         let mut dev = Device::new(Pcal6416aDevice {
             addr_pin: AddrPinState::Low,
             i2cbus,
+            share_device: None,
         });
         dev.pull_up_down_enable_port_0()
             .write(|c| {
@@ -1346,6 +1281,7 @@ mod tests {
         let mut dev = Device::new(Pcal6416aDevice {
             addr_pin: AddrPinState::Low,
             i2cbus,
+            share_device: None,
         });
         let pull_up_down_enable_port_1 = dev.pull_up_down_enable_port_1().read_async().await.unwrap();
         assert_eq!(pull_up_down_enable_port_1.pe_1_7(), true);
@@ -1366,6 +1302,7 @@ mod tests {
         let mut dev = Device::new(Pcal6416aDevice {
             addr_pin: AddrPinState::Low,
             i2cbus,
+            share_device: None,
         });
         let pull_up_down_enable_port_1 = dev.pull_up_down_enable_port_1().read().unwrap();
         assert_eq!(pull_up_down_enable_port_1.pe_1_7(), true);
@@ -1386,6 +1323,7 @@ mod tests {
         let mut dev = Device::new(Pcal6416aDevice {
             addr_pin: AddrPinState::Low,
             i2cbus,
+            share_device: None,
         });
         dev.pull_up_down_enable_port_1()
             .write_async(|c| {
@@ -1410,6 +1348,7 @@ mod tests {
         let mut dev = Device::new(Pcal6416aDevice {
             addr_pin: AddrPinState::Low,
             i2cbus,
+            share_device: None,
         });
         dev.pull_up_down_enable_port_1()
             .write(|c| {
@@ -1433,6 +1372,7 @@ mod tests {
         let mut dev = Device::new(Pcal6416aDevice {
             addr_pin: AddrPinState::Low,
             i2cbus,
+            share_device: None,
         });
         let pull_up_down_select_port_0 = dev.pull_up_down_select_port_0().read_async().await.unwrap();
         assert_eq!(pull_up_down_select_port_0.pud_0_7(), false);
@@ -1453,6 +1393,7 @@ mod tests {
         let mut dev = Device::new(Pcal6416aDevice {
             addr_pin: AddrPinState::Low,
             i2cbus,
+            share_device: None,
         });
         let pull_up_down_select_port_0 = dev.pull_up_down_select_port_0().read().unwrap();
         assert_eq!(pull_up_down_select_port_0.pud_0_7(), false);
@@ -1473,6 +1414,7 @@ mod tests {
         let mut dev = Device::new(Pcal6416aDevice {
             addr_pin: AddrPinState::Low,
             i2cbus,
+            share_device: None,
         });
         dev.pull_up_down_select_port_0()
             .write_async(|c| {
@@ -1497,6 +1439,7 @@ mod tests {
         let mut dev = Device::new(Pcal6416aDevice {
             addr_pin: AddrPinState::Low,
             i2cbus,
+            share_device: None,
         });
         dev.pull_up_down_select_port_0()
             .write(|c| {
@@ -1520,6 +1463,7 @@ mod tests {
         let mut dev = Device::new(Pcal6416aDevice {
             addr_pin: AddrPinState::Low,
             i2cbus,
+            share_device: None,
         });
         let pull_up_down_select_port_1 = dev.pull_up_down_select_port_1().read_async().await.unwrap();
         assert_eq!(pull_up_down_select_port_1.pud_1_7(), false);
@@ -1540,6 +1484,7 @@ mod tests {
         let mut dev = Device::new(Pcal6416aDevice {
             addr_pin: AddrPinState::Low,
             i2cbus,
+            share_device: None,
         });
         let pull_up_down_select_port_1 = dev.pull_up_down_select_port_1().read().unwrap();
         assert_eq!(pull_up_down_select_port_1.pud_1_7(), false);
@@ -1560,6 +1505,7 @@ mod tests {
         let mut dev = Device::new(Pcal6416aDevice {
             addr_pin: AddrPinState::Low,
             i2cbus,
+            share_device: None,
         });
         dev.pull_up_down_select_port_1()
             .write_async(|c| {
@@ -1584,6 +1530,7 @@ mod tests {
         let mut dev = Device::new(Pcal6416aDevice {
             addr_pin: AddrPinState::Low,
             i2cbus,
+            share_device: None,
         });
         dev.pull_up_down_select_port_1()
             .write(|c| {
@@ -1607,6 +1554,7 @@ mod tests {
         let mut dev = Device::new(Pcal6416aDevice {
             addr_pin: AddrPinState::Low,
             i2cbus,
+            share_device: None,
         });
         dev.config_port_1()
             .write_async(|c| {
@@ -1631,6 +1579,7 @@ mod tests {
         let mut dev = Device::new(Pcal6416aDevice {
             addr_pin: AddrPinState::High,
             i2cbus,
+            share_device: None,
         });
         dev.config_port_1()
             .write_async(|c| {
@@ -1655,6 +1604,7 @@ mod tests {
         let mut dev = Device::new(Pcal6416aDevice {
             addr_pin: AddrPinState::Low,
             i2cbus,
+            share_device: None,
         });
         let _ = dev.config_port_1().read_async().await.unwrap();
         dev.interface.i2cbus.done();
@@ -1667,6 +1617,7 @@ mod tests {
         let mut dev = Device::new(Pcal6416aDevice {
             addr_pin: AddrPinState::High,
             i2cbus,
+            share_device: None,
         });
         let _ = dev.config_port_1().read_async().await.unwrap();
         dev.interface.i2cbus.done();
@@ -1684,6 +1635,7 @@ mod tests {
         let mut dev = Device::new(Pcal6416aDevice {
             addr_pin: AddrPinState::Low,
             i2cbus,
+            share_device: None,
         });
         assert!(dev.is_pin_high(Pin::Pin0).unwrap());
         assert!(dev.is_pin_high(Pin::Pin15).unwrap());
@@ -1702,6 +1654,7 @@ mod tests {
         let mut dev = Device::new(Pcal6416aDevice {
             addr_pin: AddrPinState::Low,
             i2cbus,
+            share_device: None,
         });
         assert!(dev.is_pin_low(Pin::Pin0).unwrap());
         assert!(dev.is_pin_low(Pin::Pin15).unwrap());
@@ -1715,6 +1668,7 @@ mod tests {
         let mut dev = Device::new(Pcal6416aDevice {
             addr_pin: AddrPinState::Low,
             i2cbus,
+            share_device: None,
         });
         assert!(dev.is_pin_high(Pin::Pin15).unwrap());
         dev.interface.i2cbus.done();
@@ -1734,6 +1688,7 @@ mod tests {
         let mut dev = Device::new(Pcal6416aDevice {
             addr_pin: AddrPinState::Low,
             i2cbus,
+            share_device: None,
         });
         dev.set_pin_high(Pin::Pin0).unwrap();
         dev.set_pin_high(Pin::Pin15).unwrap();
@@ -1754,6 +1709,7 @@ mod tests {
         let mut dev = Device::new(Pcal6416aDevice {
             addr_pin: AddrPinState::Low,
             i2cbus,
+            share_device: None,
         });
         dev.set_pin_low(Pin::Pin0).unwrap();
         dev.set_pin_low(Pin::Pin15).unwrap();
@@ -1770,6 +1726,7 @@ mod tests {
         let mut dev = Device::new(Pcal6416aDevice {
             addr_pin: AddrPinState::Low,
             i2cbus,
+            share_device: None,
         });
         dev.set_pin_high(Pin::Pin15).unwrap();
         dev.interface.i2cbus.done();
@@ -1789,6 +1746,7 @@ mod tests {
         let mut dev = Device::new(Pcal6416aDevice {
             addr_pin: AddrPinState::Low,
             i2cbus,
+            share_device: None,
         });
         dev.toggle_pin(Pin::Pin0).unwrap();
         dev.toggle_pin(Pin::Pin15).unwrap();
@@ -1807,6 +1765,7 @@ mod tests {
         let mut dev = Device::new(Pcal6416aDevice {
             addr_pin: AddrPinState::Low,
             i2cbus,
+            share_device: None,
         });
         assert!(dev.is_pin_set_high(Pin::Pin0).unwrap());
         assert!(dev.is_pin_set_high(Pin::Pin15).unwrap());
@@ -1826,6 +1785,7 @@ mod tests {
         let mut dev = Device::new(Pcal6416aDevice {
             addr_pin: AddrPinState::Low,
             i2cbus,
+            share_device: None,
         });
         // Set multiple pins without borrowing conflicts
         dev.set_pin_high(Pin::Pin0).unwrap();
@@ -1853,6 +1813,7 @@ mod tests {
         let mut dev = Device::new(Pcal6416aDevice {
             addr_pin: AddrPinState::Low,
             i2cbus,
+            share_device: None,
         });
 
         {
@@ -1876,6 +1837,7 @@ mod tests {
         let mut dev = Device::new(Pcal6416aDevice {
             addr_pin: AddrPinState::Low,
             i2cbus,
+            share_device: None,
         });
 
         {
@@ -1946,6 +1908,7 @@ mod tests {
         let mut dev = Device::new(Pcal6416aDevice {
             addr_pin: AddrPinState::Low,
             i2cbus,
+            share_device: None,
         });
 
         {
@@ -2005,7 +1968,12 @@ mod tests {
         let mut dev = Device::new(Pcal6416aDevice {
             addr_pin: AddrPinState::Low,
             i2cbus,
+            share_device: None,
         });
+
+        dev.interface
+            .share_device
+            .replace(embassy_sync::mutex::Mutex::new(&mut dev));
 
         {
             let pins = dev.split();
@@ -2030,6 +1998,7 @@ mod tests {
         let mut dev = Device::new(Pcal6416aDevice {
             addr_pin: AddrPinState::Low,
             i2cbus,
+            share_device: None,
         });
 
         {
@@ -2053,6 +2022,7 @@ mod tests {
         let mut dev = Device::new(Pcal6416aDevice {
             addr_pin: AddrPinState::Low,
             i2cbus,
+            share_device: None,
         });
 
         {
@@ -2076,6 +2046,7 @@ mod tests {
         let mut dev = Device::new(Pcal6416aDevice {
             addr_pin: AddrPinState::Low,
             i2cbus,
+            share_device: None,
         });
 
         {
@@ -2101,6 +2072,7 @@ mod tests {
         let mut dev = Device::new(Pcal6416aDevice {
             addr_pin: AddrPinState::Low,
             i2cbus,
+            share_device: None,
         });
 
         {
@@ -2124,6 +2096,7 @@ mod tests {
         let mut dev = Device::new(Pcal6416aDevice {
             addr_pin: AddrPinState::Low,
             i2cbus,
+            share_device: None,
         });
 
         {
@@ -2147,6 +2120,7 @@ mod tests {
         let mut dev = Device::new(Pcal6416aDevice {
             addr_pin: AddrPinState::Low,
             i2cbus,
+            share_device: None,
         });
 
         {
@@ -2196,6 +2170,7 @@ mod tests {
         let mut dev = Device::new(Pcal6416aDevice {
             addr_pin: AddrPinState::Low,
             i2cbus,
+            share_device: None,
         });
 
         {
