@@ -16,11 +16,11 @@ url = "https://raw.githubusercontent.com/google/rust-crate-audits/main/audits.to
 [imports.mozilla]
 url = "https://raw.githubusercontent.com/mozilla/supply-chain/main/audits.toml"
 
+[policy.embedded-hal]
+audit-as-crates-io = true
+
+[policy.embedded-hal-async]
+audit-as-crates-io = true
+
 [policy.pcal6416a]
-audit-as-crates-io = false
-
-[policy."â”‚   embedded-hal"]
-audit-as-crates-io = false
-
-[policy."â”‚   embedded-hal-async"]
 audit-as-crates-io = false
